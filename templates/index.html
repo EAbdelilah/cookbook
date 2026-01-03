@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, shrink-to-fit=no">
+    <title>Strategic Writing Assistant</title>
+    <style>
+      body { font-family: sans-serif; margin: 2em; }
+      textarea { width: 100%; height: 100px; }
+      .results { white-space: pre-wrap; background-color: #f4f4f4; padding: 1em; border: 1px solid #ddd; }
+    </style>
+  </head>
+  <body>
+    <h1>Strategic Writing Assistant</h1>
+    <form method="post" enctype="multipart/form-data">
+      <h2>1. Upload Your Documents</h2>
+      <p>Select your PDF, TXT, and PowerPoint files.</p>
+      <input type="file" name="files" multiple>
+
+      <h2>2. Application Context</h2>
+      <p>Paste the grant/accelerator description, focus areas, or mission.</p>
+      <textarea name="grant_context"></textarea>
+
+      <h2>3. Persona & Tone</h2>
+      <p>Describe the ideal tone for this application (e.g., "Ambitious, data-driven founder").</p>
+      <textarea name="persona"></textarea>
+
+      <h2>4. Questions</h2>
+      <p>Enter each question on a new line.</p>
+      <textarea name="questions"></textarea>
+
+      <br><br>
+      <button type="submit">Generate Answers</button>
+    </form>
+
+    {% if results %}
+      <h2>Generated Answers</h2>
+      <div class="results">
+        {% for result in results %}
+          <p>{{ result }}</p>
+          <hr>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </body>
+</html>
