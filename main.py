@@ -66,9 +66,9 @@ def load_documents_from_directory(dir_path):
         load_hardcoded_documents()
 
 # --- CONFIGURATION ---
-API_KEY = os.getenv("GEMINI_API_KEY")
-if API_KEY:
-    genai.configure(api_key=API_KEY)
+# NOTE: Set your API Key here.
+API_KEY = "AIzaSyCWrbfoa0ASrkhpu71XVZl2B_xVmuo-yQE"  # <--- PASTE YOUR GEMINI API KEY HERE
+genai.configure(api_key=API_KEY)
 
 # --- 1. PRE-LOADED KNOWLEDGE BASE (FROM YOUR DOCUMENTS) ---
 
@@ -427,8 +427,8 @@ def main():
     parser.add_argument("--non-interactive", action="store_true", help="Run in non-interactive mode for testing.")
     args = parser.parse_args()
 
-    if not API_KEY:
-        print("\n" + "!"*70 + "\n!!! FATAL ERROR: GEMINI_API_KEY environment variable is not set. !!!\n" + "!"*70)
+    if not API_KEY or "ADD YOUR GEMINI API KEY HERE" in API_KEY:
+        print("\n" + "!"*70 + "\n!!! FATAL ERROR: API_KEY is not set. Please add it and restart. !!!\n" + "!"*70)
         return
 
     if args.documents_dir:
