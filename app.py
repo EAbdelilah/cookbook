@@ -131,7 +131,7 @@ def load_documents_from_directory(dir_path):
 METRICS = { "funding_raised_usd": 250000, "seed_round_target_usd": 1500000 }
 
 def make_api_call(payload, system_prompt_text, retries=3):
-    model = genai.GenerativeModel('gemini-1.5-flash', system_instruction=system_prompt_text)
+    model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_prompt_text)
     for attempt in range(retries):
         try:
             time.sleep(2)
