@@ -9,6 +9,7 @@ import random
 from googlesearch import search
 import PyPDF2
 from pptx import Presentation
+import numpy as np
 
 # --- Flask App Setup ---
 app = Flask(__name__)
@@ -65,11 +66,16 @@ HTML_TEMPLATE = """
 </html>
 """
 
-# --- Core RAG Logic (from rag_core.py) ---
+# --- Core RAG Logic ---
 
 # --- CONFIGURATION ---
-API_KEY = "AIzaSyCWrbfoa0ASrkhpu71XVZl2B_xVmuo-yQE"
+API_KEY = "AIzaSyCWrbfoaASrkhpu71XVZl2B_xVmuo-yQE"
 genai.configure(api_key=API_KEY)
+
+# --- Professional RAG Configuration ---
+EMBEDDING_MODEL_NAME = 'text-embedding-004'
+GENERATION_MODEL_NAME = 'gemini-1.5-flash'
+TOP_K_CHUNKS = 5 # Number of most relevant chunks to retrieve
 
 # --- File Reading Functions ---
 def read_txt(file_path):
@@ -99,105 +105,82 @@ def read_pptx(file_path):
         print(f"Error reading PPTX {file_path}: {e}")
     return text
 
-# --- Document Handling ---
-DOCUMENTS = {}
-DOCUMENT_DESCRIPTIONS = {}
+# --- Vector Search Pipeline ---
 
-def load_documents_from_directory(dir_path):
-    """Loads all supported documents from a directory and populates the global dictionaries."""
-    print("\n[+] Loading documents...")
-    global DOCUMENTS, DOCUMENT_DESCRIPTIONS
-    DOCUMENTS = {}
-    DOCUMENT_DESCRIPTIONS = {}
-    doc_id = 1
-    for filename in os.listdir(dir_path):
-        file_path = os.path.join(dir_path, filename)
-        content = ""
-        print(f"    - Processing file: {filename}")
-        if filename.endswith(".txt"):
-            content = read_txt(file_path)
-        elif filename.endswith(".pdf"):
-            content = read_pdf(file_path)
-        elif filename.endswith(".pptx"):
-            content = read_pptx(file_path)
+def chunk_text(text, chunk_size=1000, overlap=200):
+    """Splits a long text into smaller, overlapping chunks."""
+    # Simple split by paragraphs first
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    return paragraphs
 
-        if content:
-            doc_key = str(doc_id)
-            doc_name = os.path.splitext(filename)[0].upper()
-            DOCUMENTS[doc_key] = (doc_name, content)
-            DOCUMENT_DESCRIPTIONS[doc_key] = f"{doc_name}: {content[:100]}..."
-            print(f"      ... Loaded as document #{doc_id}")
-            doc_id += 1
-
-    if not DOCUMENTS:
-        print(f"[Warning] No documents found in '{dir_path}'.")
-    else:
-        print(f"[+] Successfully loaded {len(DOCUMENTS)} documents.")
-
-METRICS = { "funding_raised_usd": 250000, "seed_round_target_usd": 1500000 }
-
-def make_api_call(payload, system_prompt_text, retries=3):
-    model = genai.GenerativeModel('gemini-2.5-flash', system_instruction=system_prompt_text)
-    for attempt in range(retries):
-        try:
-            time.sleep(2)
-            response = model.generate_content(payload['contents'])
-            return response.text
-        except Exception as e:
-            if "429" in str(e) or "quota" in str(e).lower():
-                time.sleep(60 + random.uniform(1, 5))
-            else:
-                return f"An error occurred: {e}"
-    return "Error: Failed after max retries."
-
-def searcher_ai(user_query, grant_context, all_questions):
-    print("\n[+] Running Searcher AI...")
-    system_prompt = "You are an expert researcher..."
-    search_query = f"{user_query} {grant_context} {all_questions}"
-    print(f"    - Performing web search for: '{search_query[:100]}...'")
+def embed_content(chunks):
+    """Embeds a list of text chunks in a single batch API call."""
+    print(f"    - Embedding {len(chunks)} chunks in a batch...")
     try:
-        search_results = search(search_query, num_results=5)
-        formatted_results = "\n".join([f"- {result}" for result in search_results])
-        summary_prompt = f"Please summarize... Search Results:\n{formatted_results}"
-        payload = {"contents": [{"parts": [{"text": summary_prompt}]}]}
-        result = make_api_call(payload, system_prompt)
-        print("    - Web search and summarization complete.")
-        return result
+        result = genai.embed_content(
+            model=EMBEDDING_MODEL_NAME,
+            content=chunks,
+            task_type="retrieval_document"
+        )
+        print("      ... Batch embedding complete.")
+        return result['embedding']
     except Exception as e:
-        print(f"    - Web search failed: {e}")
-        return f"An error during web search: {e}"
+        print(f"      ... Error during batch embedding: {e}")
+        return []
 
-def select_best_documents(user_query, document_descriptions, searcher_results):
-    print("\n[+] Running Librarian AI...")
-    system_prompt = "You are an intelligent document routing assistant..."
-    descriptions_text = "\n".join([f"{num}: {desc}" for num, desc in document_descriptions.items()])
-    full_prompt = f"... AVAILABLE INTERNAL DOCUMENTS ---\n{descriptions_text}\n\n..."
-    payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
-    print("    - Asking AI to select relevant documents...")
-    response_text = make_api_call(payload, system_prompt)
-    selected_ids = re.findall(r'\d+', response_text)
-    valid_ids = [s_id for s_id in selected_ids if s_id in DOCUMENTS]
+def find_most_relevant_chunks(question_embedding, chunk_embeddings, chunks):
+    """Finds the most relevant chunks using cosine similarity."""
+    print("    - Performing vector search...")
+    # Convert lists to numpy arrays for vectorized operations
+    question_vec = np.array(question_embedding)
+    chunk_vecs = np.array(chunk_embeddings)
 
-    if valid_ids:
-        print(f"    - Librarian AI selected document(s): {', '.join(valid_ids)}")
-    else:
-        print("    - Librarian AI did not select specific documents, using all as fallback.")
+    # Calculate cosine similarity
+    dot_products = np.dot(chunk_vecs, question_vec)
+    norms = np.linalg.norm(chunk_vecs, axis=1) * np.linalg.norm(question_vec)
+    similarities = dot_products / norms
 
-    return valid_ids if valid_ids else list(DOCUMENTS.keys())
+    # Get the indices of the top K most similar chunks
+    top_k_indices = np.argsort(similarities)[-TOP_K_CHUNKS:][::-1]
 
-def generate_final_answer(user_query, document_context, grant_context, persona, metrics, searcher_results):
+    print(f"      ... Found top {TOP_K_CHUNKS} relevant chunks.")
+    return [chunks[i] for i in top_k_indices]
+
+# --- AI Chain ---
+
+def generate_final_answer(user_query, document_context, grant_context, persona):
+    """Generates the final answer using the Writer AI."""
     print("\n[+] Running Writer AI...")
-    system_prompt = "You are a world-class AI writer..."
-    full_prompt = f"... QUESTION TO ANSWER ---\n'{user_query}'"
-    payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
-    print("    - Generating final answer...")
-    result = make_api_call(payload, system_prompt)
-    print("    - Final answer generated.")
-    return result
+    system_prompt = (
+        "You are a world-class AI writer and grant reviewer. Your process is to: "
+        "1. Synthesize: Combine the user's query, persona, application context, and the provided knowledge base. "
+        "2. Refine: Produce a polished, final-version answer. "
+        "Your final answer MUST be perfectly aligned with the provided persona and context, and well-supported by the knowledge base. "
+        "Provide only the final, polished text."
+    )
 
+    full_prompt = (
+        f"--- ADOPT THIS PERSONA ---\n{persona}\n\n"
+        f"--- APPLICATION CONTEXT (Your Primary Focus) ---\n{grant_context}\n\n"
+        f"--- INTERNAL KNOWLEDGE BASE (Use for all qualitative info) ---\n{document_context}\n\n"
+        f"--- QUESTION TO ANSWER ---\n"
+        f"Based on all the above, generate the single best, final-version answer to the following question:\n"
+        f"'{user_query}'"
+    )
+
+    try:
+        model = genai.GenerativeModel(GENERATION_MODEL_NAME, system_instruction=system_prompt)
+        response = model.generate_content(full_prompt)
+        print("    - Final answer generated.")
+        return response.text
+    except Exception as e:
+        print(f"    - Error during final answer generation: {e}")
+        return f"An error occurred during final generation: {e}"
+
+# --- Main Processing Function ---
 def process_request(upload_dir, grant_context, persona, questions_text):
     print("\n\n" + "="*50)
-    print("===== STARTING NEW REQUEST =====")
+    print("===== STARTING NEW REQUEST (Vector Search Workflow) =====")
     print("="*50)
 
     if not API_KEY or "AIzaSy" not in API_KEY:
@@ -205,9 +188,32 @@ def process_request(upload_dir, grant_context, persona, questions_text):
         print(f"[!] {error_msg}")
         return [error_msg]
 
-    load_documents_from_directory(upload_dir)
-    if not DOCUMENTS:
-        error_msg = "[Error] No documents were successfully processed from the uploads directory."
+    # 1. Load and Chunk Documents
+    print("\n[+] Step 1: Loading and Chunking Documents...")
+    all_text = ""
+    for filename in os.listdir(upload_dir):
+        file_path = os.path.join(upload_dir, filename)
+        print(f"    - Reading file: {filename}")
+        if filename.endswith(".txt"):
+            all_text += read_txt(file_path) + "\n\n"
+        elif filename.endswith(".pdf"):
+            all_text += read_pdf(file_path) + "\n\n"
+        elif filename.endswith(".pptx"):
+            all_text += read_pptx(file_path) + "\n\n"
+
+    if not all_text.strip():
+        error_msg = "[Error] No text could be extracted from the uploaded documents."
+        print(f"[!] {error_msg}")
+        return [error_msg]
+
+    chunks = chunk_text(all_text)
+    print(f"    - Document content split into {len(chunks)} chunks.")
+
+    # 2. Embed all chunks
+    print("\n[+] Step 2: Embedding Document Chunks...")
+    chunk_embeddings = embed_content(chunks)
+    if not chunk_embeddings:
+        error_msg = "[Error] Failed to create embeddings for the document chunks."
         print(f"[!] {error_msg}")
         return [error_msg]
 
@@ -218,8 +224,6 @@ def process_request(upload_dir, grant_context, persona, questions_text):
         return [error_msg]
 
     final_answers = []
-    sharia_keywords = ["sharia", "halal", "islamic", "riba", "muslim"]
-
     for i, user_question in enumerate(questions):
         print("\n" + "-"*50)
         print(f"===== PROCESSING QUESTION {i+1}/{len(questions)} =====")
@@ -228,29 +232,26 @@ def process_request(upload_dir, grant_context, persona, questions_text):
 
         answer_block = f"===== PROCESSING QUESTION {i+1}/{len(questions)} =====\n"
         answer_block += f"QUESTION: {user_question}\n\n"
-        adapted_persona = persona
-        # ... (rest of the processing logic)
 
-        searcher_results = searcher_ai(user_question, grant_context, questions)
-        selected_doc_ids = select_best_documents(user_question, DOCUMENT_DESCRIPTIONS, searcher_results)
+        # 3. Embed the Question
+        print("\n[+] Step 3: Embedding the User's Question...")
+        question_embedding_result = genai.embed_content(
+            model=EMBEDDING_MODEL_NAME,
+            content=user_question,
+            task_type="retrieval_query"
+        )
+        question_embedding = question_embedding_result['embedding']
+        print("    - Question embedding complete.")
 
-        combined_context = ""
-        selected_names = []
-        for doc_id in selected_doc_ids:
-            if doc_id in DOCUMENTS:
-                doc_name, doc_content = DOCUMENTS[doc_id]
-                selected_names.append(doc_name)
-                combined_context += f"\n--- DOC: {doc_name} ---\n{doc_content}\n"
+        # 4. Find Relevant Chunks
+        print("\n[+] Step 4: Finding Relevant Chunks via Vector Search...")
+        relevant_chunks = find_most_relevant_chunks(question_embedding, chunk_embeddings, chunks)
+        context = "\n---\n".join(relevant_chunks)
 
-        if not combined_context:
-            error_msg = "[Error] Could not build context from selected documents."
-            print(f"[!] {error_msg}")
-            final_answers.append(answer_block + error_msg)
-            continue
+        # 5. Generate Final Answer
+        final_answer = generate_final_answer(user_question, context, grant_context, persona)
 
-        print(f"\n[+] Using knowledge from: {', '.join(selected_names)}")
-        answer_block += f"[Info] Using knowledge from: {', '.join(selected_names)}\n\n"
-        final_answer = generate_final_answer(user_question, combined_context, grant_context, adapted_persona, METRICS, searcher_results)
+        answer_block += f"[Info] Using knowledge from the {len(relevant_chunks)} most relevant document chunks.\n\n"
         answer_block += "===== FINAL RECOMMENDED ANSWER =====\n"
         answer_block += final_answer
         final_answers.append(answer_block)
@@ -283,6 +284,7 @@ def index():
             questions_text=questions
         )
 
+        # Clean up uploaded files
         for file in uploaded_files:
              if file.filename != '':
                 os.remove(os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename)))
