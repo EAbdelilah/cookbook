@@ -104,6 +104,8 @@ DOCUMENTS = {}
 DOCUMENT_DESCRIPTIONS = {}
 
 def load_documents_from_directory(dir_path):
+    """Loads all supported documents from a directory and populates the global dictionaries."""
+    print("\n[+] Loading documents...")
     global DOCUMENTS, DOCUMENT_DESCRIPTIONS
     DOCUMENTS = {}
     DOCUMENT_DESCRIPTIONS = {}
@@ -111,6 +113,7 @@ def load_documents_from_directory(dir_path):
     for filename in os.listdir(dir_path):
         file_path = os.path.join(dir_path, filename)
         content = ""
+        print(f"    - Processing file: {filename}")
         if filename.endswith(".txt"):
             content = read_txt(file_path)
         elif filename.endswith(".pdf"):
@@ -123,10 +126,13 @@ def load_documents_from_directory(dir_path):
             doc_name = os.path.splitext(filename)[0].upper()
             DOCUMENTS[doc_key] = (doc_name, content)
             DOCUMENT_DESCRIPTIONS[doc_key] = f"{doc_name}: {content[:100]}..."
+            print(f"      ... Loaded as document #{doc_id}")
             doc_id += 1
 
     if not DOCUMENTS:
         print(f"[Warning] No documents found in '{dir_path}'.")
+    else:
+        print(f"[+] Successfully loaded {len(DOCUMENTS)} documents.")
 
 METRICS = { "funding_raised_usd": 250000, "seed_round_target_usd": 1500000 }
 
@@ -145,49 +151,81 @@ def make_api_call(payload, system_prompt_text, retries=3):
     return "Error: Failed after max retries."
 
 def searcher_ai(user_query, grant_context, all_questions):
+    print("\n[+] Running Searcher AI...")
     system_prompt = "You are an expert researcher..."
     search_query = f"{user_query} {grant_context} {all_questions}"
+    print(f"    - Performing web search for: '{search_query[:100]}...'")
     try:
         search_results = search(search_query, num_results=5)
         formatted_results = "\n".join([f"- {result}" for result in search_results])
         summary_prompt = f"Please summarize... Search Results:\n{formatted_results}"
         payload = {"contents": [{"parts": [{"text": summary_prompt}]}]}
-        return make_api_call(payload, system_prompt)
+        result = make_api_call(payload, system_prompt)
+        print("    - Web search and summarization complete.")
+        return result
     except Exception as e:
+        print(f"    - Web search failed: {e}")
         return f"An error during web search: {e}"
 
 def select_best_documents(user_query, document_descriptions, searcher_results):
+    print("\n[+] Running Librarian AI...")
     system_prompt = "You are an intelligent document routing assistant..."
     descriptions_text = "\n".join([f"{num}: {desc}" for num, desc in document_descriptions.items()])
     full_prompt = f"... AVAILABLE INTERNAL DOCUMENTS ---\n{descriptions_text}\n\n..."
     payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
+    print("    - Asking AI to select relevant documents...")
     response_text = make_api_call(payload, system_prompt)
     selected_ids = re.findall(r'\d+', response_text)
     valid_ids = [s_id for s_id in selected_ids if s_id in DOCUMENTS]
+
+    if valid_ids:
+        print(f"    - Librarian AI selected document(s): {', '.join(valid_ids)}")
+    else:
+        print("    - Librarian AI did not select specific documents, using all as fallback.")
+
     return valid_ids if valid_ids else list(DOCUMENTS.keys())
 
 def generate_final_answer(user_query, document_context, grant_context, persona, metrics, searcher_results):
+    print("\n[+] Running Writer AI...")
     system_prompt = "You are a world-class AI writer..."
     full_prompt = f"... QUESTION TO ANSWER ---\n'{user_query}'"
     payload = {"contents": [{"parts": [{"text": full_prompt}]}]}
-    return make_api_call(payload, system_prompt)
+    print("    - Generating final answer...")
+    result = make_api_call(payload, system_prompt)
+    print("    - Final answer generated.")
+    return result
 
 def process_request(upload_dir, grant_context, persona, questions_text):
+    print("\n\n" + "="*50)
+    print("===== STARTING NEW REQUEST =====")
+    print("="*50)
+
     if not API_KEY or "AIzaSy" not in API_KEY:
-        return ["FATAL ERROR: API_KEY is not set correctly."]
+        error_msg = "FATAL ERROR: API_KEY is not set correctly."
+        print(f"[!] {error_msg}")
+        return [error_msg]
 
     load_documents_from_directory(upload_dir)
     if not DOCUMENTS:
-        return ["[Error] No documents were successfully processed from the uploads directory."]
+        error_msg = "[Error] No documents were successfully processed from the uploads directory."
+        print(f"[!] {error_msg}")
+        return [error_msg]
 
     questions = [q.strip() for q in questions_text.split('\n') if q.strip()]
     if not questions:
-        return ["[Error] No questions provided."]
+        error_msg = "[Error] No questions provided."
+        print(f"[!] {error_msg}")
+        return [error_msg]
 
     final_answers = []
     sharia_keywords = ["sharia", "halal", "islamic", "riba", "muslim"]
 
     for i, user_question in enumerate(questions):
+        print("\n" + "-"*50)
+        print(f"===== PROCESSING QUESTION {i+1}/{len(questions)} =====")
+        print(f"QUESTION: {user_question}")
+        print("-"*50)
+
         answer_block = f"===== PROCESSING QUESTION {i+1}/{len(questions)} =====\n"
         answer_block += f"QUESTION: {user_question}\n\n"
         adapted_persona = persona
@@ -205,15 +243,21 @@ def process_request(upload_dir, grant_context, persona, questions_text):
                 combined_context += f"\n--- DOC: {doc_name} ---\n{doc_content}\n"
 
         if not combined_context:
-            final_answers.append(answer_block + "[Error] Could not build context from selected documents.")
+            error_msg = "[Error] Could not build context from selected documents."
+            print(f"[!] {error_msg}")
+            final_answers.append(answer_block + error_msg)
             continue
 
+        print(f"\n[+] Using knowledge from: {', '.join(selected_names)}")
         answer_block += f"[Info] Using knowledge from: {', '.join(selected_names)}\n\n"
         final_answer = generate_final_answer(user_question, combined_context, grant_context, adapted_persona, METRICS, searcher_results)
         answer_block += "===== FINAL RECOMMENDED ANSWER =====\n"
         answer_block += final_answer
         final_answers.append(answer_block)
 
+    print("\n" + "="*50)
+    print("===== REQUEST COMPLETE =====")
+    print("="*50 + "\n")
     return final_answers
 
 # --- Flask Routes ---
@@ -221,6 +265,7 @@ def process_request(upload_dir, grant_context, persona, questions_text):
 def index():
     results = None
     if request.method == 'POST':
+        print("\n[+] Received new request from web UI.")
         uploaded_files = request.files.getlist('files')
         for file in uploaded_files:
             if file.filename != '':
