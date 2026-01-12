@@ -148,8 +148,8 @@ def find_most_relevant_chunks(question_embedding, chunk_embeddings, chunks):
 
 # --- AI Chain ---
 
-def generate_final_answer(user_query, document_context, grant_context, persona):
-    """Generates the final answer using the Writer AI."""
+def generate_final_answer(user_query, document_context, grant_context, persona, max_retries=5):
+    """Generates the final answer using the Writer AI with exponential backoff."""
     print("\n[+] Running Writer AI...")
     system_prompt = (
         "You are a world-class AI writer and grant reviewer. Your process is to: "
@@ -168,14 +168,26 @@ def generate_final_answer(user_query, document_context, grant_context, persona):
         f"'{user_query}'"
     )
 
-    try:
-        model = genai.GenerativeModel(GENERATION_MODEL_NAME, system_instruction=system_prompt)
-        response = model.generate_content(full_prompt)
-        print("    - Final answer generated.")
-        return response.text
-    except Exception as e:
-        print(f"    - Error during final answer generation: {e}")
-        return f"An error occurred during final generation: {e}"
+    model = genai.GenerativeModel(GENERATION_MODEL_NAME, system_instruction=system_prompt)
+
+    for attempt in range(max_retries):
+        try:
+            response = model.generate_content(full_prompt)
+            print("    - Final answer generated successfully.")
+            return response.text
+        except Exception as e:
+            error_message = str(e)
+            if "429" in error_message or "quota" in error_message.lower():
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                print(f"    - Rate limit hit. Waiting for {wait_time:.2f} seconds before retrying...")
+                time.sleep(wait_time)
+            else:
+                print(f"    - A non-retryable error occurred: {e}")
+                return f"An error occurred during final generation: {e}"
+
+    final_error_message = "Error: Failed to generate answer after multiple retries due to persistent rate limiting."
+    print(f"    - {final_error_message}")
+    return final_error_message
 
 # --- Main Processing Function ---
 def process_request(upload_dir, grant_context, persona, questions_text):
