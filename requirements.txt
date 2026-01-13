@@ -1,0 +1,5 @@
+Flask
+PyPDF2
+python-pptx
+google-generativeai
+googlesearch-python
