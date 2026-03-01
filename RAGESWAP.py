@@ -7,6 +7,8 @@ import json
 import re
 import time
 import random
+import uuid
+import shutil
 from googlesearch import search
 import PyPDF2
 from pptx import Presentation
@@ -119,11 +121,41 @@ def read_pptx(file_path):
 
 # --- Vector Search Pipeline ---
 
-def chunk_text(text, chunk_size=1000, overlap=200):
-    """Splits a long text into smaller, overlapping chunks."""
-    # Simple split by paragraphs first
-    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-    return paragraphs
+def chunk_text(text, chunk_size=2000, overlap=400):
+    """Splits a long text into smaller, overlapping chunks, trying to break at whitespace."""
+    if not text:
+        return []
+
+    chunks = []
+    start = 0
+    text_len = len(text)
+
+    while start < text_len:
+        # If we have less than chunk_size left, take it all
+        if start + chunk_size >= text_len:
+            chunks.append(text[start:].strip())
+            break
+
+        end = start + chunk_size
+        # Try to find a good breaking point (newline or space) near the end
+        break_point = text.rfind('\n', end - 200, end)
+        if break_point == -1:
+            break_point = text.rfind(' ', end - 100, end)
+
+        if break_point != -1:
+            end = break_point
+
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+
+        start = end - overlap
+        if start < 0: start = 0
+        # Safety check to ensure we always move forward
+        if start >= end:
+            start = end
+
+    return [c for c in chunks if c]
 
 def embed_content(chunks):
     """Embeds a list of text chunks in a single batch API call."""
@@ -304,33 +336,45 @@ def index():
         print("\n[+] Received new request from web UI.")
         uploaded_files = request.files.getlist('files')
 
-        # Ensure upload folder exists
-        if not os.path.exists(app.config['UPLOAD_FOLDER']):
-             os.makedirs(app.config['UPLOAD_FOLDER'])
+        # Check if any files were actually uploaded
+        if not any(f.filename for f in uploaded_files):
+            return render_template_string(HTML_TEMPLATE, results=["[Error] No files were uploaded. Please select your documents (PDF, TXT, PPTX)."])
 
-        for file in uploaded_files:
-            if file.filename != '':
-                filename = secure_filename(file.filename)
-                file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        # Create a unique session folder for this request
+        session_id = str(uuid.uuid4())
+        session_upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], session_id)
+        os.makedirs(session_upload_dir, exist_ok=True)
 
-        grant_context = request.form.get('grant_context', 'A general inquiry.')
-        persona = request.form.get('persona', 'A professional representative.')
-        questions = request.form.get('questions', '')
+        try:
+            saved_count = 0
+            for file in uploaded_files:
+                if file.filename != '':
+                    filename = secure_filename(file.filename)
+                    # Only save supported extensions
+                    if filename.lower().endswith(('.pdf', '.txt', '.pptx')):
+                        file_path = os.path.join(session_upload_dir, filename)
+                        file.save(file_path)
+                        saved_count += 1
 
-        results = process_request(
-            upload_dir=app.config['UPLOAD_FOLDER'],
-            grant_context=grant_context,
-            persona=persona,
-            questions_text=questions
-        )
+            if saved_count == 0:
+                 return render_template_string(HTML_TEMPLATE, results=["[Error] None of the uploaded files are supported. Please upload .pdf, .txt, or .pptx files."])
 
-        # Clean up uploaded files
-        for file in uploaded_files:
-             if file.filename != '':
-                try:
-                    os.remove(os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename)))
-                except:
-                    pass
+            grant_context = request.form.get('grant_context', 'A general inquiry.')
+            persona = request.form.get('persona', 'A professional representative.')
+            questions = request.form.get('questions', '')
+
+            results = process_request(
+                upload_dir=session_upload_dir,
+                grant_context=grant_context,
+                persona=persona,
+                questions_text=questions
+            )
+        finally:
+            # Clean up session folder
+            try:
+                shutil.rmtree(session_upload_dir)
+            except Exception as e:
+                print(f"Error cleaning up {session_upload_dir}: {e}")
 
     return render_template_string(HTML_TEMPLATE, results=results)
 
