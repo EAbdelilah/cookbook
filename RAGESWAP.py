@@ -80,11 +80,7 @@ HTML_TEMPLATE = """
 # --- Core RAG Logic ---
 
 # --- CONFIGURATION ---
-# Use environment variables for secrets
-API_KEY = os.environ.get("GEMINI_API_KEY")
-
-if not API_KEY:
-    raise ValueError("GEMINI_API_KEY environment variable is not set")
+API_KEY = os.environ.get("GEMINI_API_KEY", "AIzaSyCI8ud8x2kScEvfUDeAuiUSa7DC56m_XyI")
 
 client = genai.Client(api_key=API_KEY)
 
