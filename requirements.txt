@@ -1,0 +1,6 @@
+flask
+google-genai
+googlesearch-python
+PyPDF2
+python-pptx
+numpy
