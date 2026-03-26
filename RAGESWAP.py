@@ -91,7 +91,30 @@ client = genai.Client(api_key=API_KEY)
 # --- Professional RAG Configuration ---
 EMBEDDING_MODEL_NAME = 'gemini-embedding-001'
 GENERATION_MODEL_NAME = 'gemini-1.5-flash'
-TOP_K_CHUNKS = 20 # Number of most relevant chunks to retrieve
+TOP_K_CHUNKS = 15 # Number of most relevant chunks to retrieve (slightly reduced for token efficiency)
+
+# --- API Interaction with Retry Logic ---
+
+def call_with_retry(func, *args, max_retries=12, **kwargs):
+    """Generic retry wrapper with exponential backoff and jitter for API calls."""
+    for attempt in range(max_retries):
+        try:
+            return func(*args, **kwargs)
+        except Exception as e:
+            error_message = str(e).lower()
+            # Catch rate limit, quota, and temporary server errors
+            if any(x in error_message for x in ["429", "quota", "503", "unavailable", "high demand", "deadline_exceeded"]):
+                # Exponential backoff with jitter: 2^attempt + random(0, 2)
+                # Starting at ~2s, then 4s, 8s, 16s, 32s, 64s, 128s...
+                wait_time = (2 ** attempt) + random.uniform(0, 2)
+                print(f"    - Transient error or Rate limit hit. Waiting for {wait_time:.2f} seconds before retrying (Attempt {attempt+1}/{max_retries})...")
+                time.sleep(wait_time)
+            else:
+                # For non-transient errors, raise immediately
+                print(f"    - A non-retryable error occurred: {e}")
+                raise e
+
+    raise Exception(f"Failed after {max_retries} attempts due to persistent API errors or rate limits.")
 
 # --- File Reading Functions ---
 def read_txt(file_path):
@@ -160,14 +183,17 @@ def chunk_text(text, chunk_size=2000, overlap=400):
     return [c for c in chunks if c]
 
 def embed_content(chunks):
-    """Embeds a list of text chunks in a single batch API call."""
+    """Embeds a list of text chunks in a single batch API call with retry logic."""
     print(f"    - Embedding {len(chunks)} chunks in a batch...")
     try:
-        result = client.models.embed_content(
-            model=EMBEDDING_MODEL_NAME,
-            contents=chunks,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-        )
+        def do_embed():
+            return client.models.embed_content(
+                model=EMBEDDING_MODEL_NAME,
+                contents=chunks,
+                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+            )
+
+        result = call_with_retry(do_embed)
         print("      ... Batch embedding complete.")
         return [e.values for e in result.embeddings]
     except Exception as e:
@@ -187,15 +213,17 @@ def find_most_relevant_chunks(question_embedding, chunk_embeddings, chunks):
     similarities = dot_products / norms
 
     # Get the indices of the top K most similar chunks
-    top_k_indices = np.argsort(similarities)[-TOP_K_CHUNKS:][::-1]
+    # Ensure TOP_K_CHUNKS does not exceed the actual number of chunks
+    k = min(TOP_K_CHUNKS, len(chunks))
+    top_k_indices = np.argsort(similarities)[-k:][::-1]
 
-    print(f"      ... Found top {TOP_K_CHUNKS} relevant chunks.")
+    print(f"      ... Found top {k} relevant chunks.")
     return [chunks[i] for i in top_k_indices]
 
 # --- AI Chain ---
 
-def generate_final_answer(user_query, document_context, grant_context, persona, max_retries=10):
-    """Generates the final answer using the Writer AI with exponential backoff."""
+def generate_final_answer(user_query, document_context, grant_context, persona):
+    """Generates the final answer using the Writer AI with robust retry logic."""
     print("\n[+] Running Writer AI...")
     system_prompt = (
         "You are a world-class AI writer and grant reviewer. Your process is to: "
@@ -214,30 +242,22 @@ def generate_final_answer(user_query, document_context, grant_context, persona, 
         f"'{user_query}'"
     )
 
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
+    try:
+        def do_generate():
+            return client.models.generate_content(
                 model=GENERATION_MODEL_NAME,
                 contents=full_prompt,
                 config=types.GenerateContentConfig(
                     system_instruction=system_prompt
                 )
             )
-            print("    - Final answer generated successfully.")
-            return response.text
-        except Exception as e:
-            error_message = str(e).lower()
-            if any(x in error_message for x in ["429", "quota", "503", "unavailable", "high demand"]):
-                wait_time = (2 ** attempt) + random.uniform(0, 1)
-                print(f"    - Transient error or Rate limit hit. Waiting for {wait_time:.2f} seconds before retrying (Attempt {attempt+1}/{max_retries})...")
-                time.sleep(wait_time)
-            else:
-                print(f"    - A non-retryable error occurred: {e}")
-                return f"An error occurred during final generation: {e}"
 
-    final_error_message = "Error: Failed to generate answer after multiple retries due to persistent rate limiting."
-    print(f"    - {final_error_message}")
-    return final_error_message
+        response = call_with_retry(do_generate)
+        print("    - Final answer generated successfully.")
+        return response.text
+    except Exception as e:
+        print(f"    - Failed to generate answer: {e}")
+        return f"An error occurred during final generation after multiple retries: {e}"
 
 # --- Main Processing Function ---
 def process_request(upload_dir, grant_context, persona, questions_text):
@@ -297,13 +317,21 @@ def process_request(upload_dir, grant_context, persona, questions_text):
 
         # 3. Embed the Question
         print("\n[+] Step 3: Embedding the User's Question...")
-        question_embedding_result = client.models.embed_content(
-            model=EMBEDDING_MODEL_NAME,
-            contents=user_question,
-            config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
-        )
-        question_embedding = question_embedding_result.embeddings[0].values
-        print("    - Question embedding complete.")
+        try:
+            def do_embed_query():
+                return client.models.embed_content(
+                    model=EMBEDDING_MODEL_NAME,
+                    contents=user_question,
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_QUERY")
+                )
+
+            question_embedding_result = call_with_retry(do_embed_query)
+            question_embedding = question_embedding_result.embeddings[0].values
+            print("    - Question embedding complete.")
+        except Exception as e:
+            print(f"    - Failed to embed question: {e}")
+            final_answers.append(answer_block + f"[Error] Failed to embed question after retries: {e}")
+            continue
 
         # 4. Find Relevant Chunks
         print("\n[+] Step 4: Finding Relevant Chunks via Vector Search...")
@@ -321,7 +349,7 @@ def process_request(upload_dir, grant_context, persona, questions_text):
         # Throttling to respect API Rate Limits (approx 15 RPM for free tier)
         # 1 question = 1 embed + 1 generation = 2 calls.
         # We need to slow down loop.
-        print("    [Rate Limit Control] Sleeping for 20 seconds between questions...")
+        print(f"    [Rate Limit Control] Sleeping for 20 seconds between questions...")
         time.sleep(20)
 
     print("\n" + "="*50)
