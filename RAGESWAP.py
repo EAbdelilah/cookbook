@@ -95,19 +95,28 @@ TOP_K_CHUNKS = 15 # Number of most relevant chunks to retrieve (slightly reduced
 
 # --- API Interaction with Retry Logic ---
 
-def call_with_retry(func, *args, max_retries=12, **kwargs):
-    """Generic retry wrapper with exponential backoff and jitter for API calls."""
+def call_with_retry(func, *args, max_retries=15, **kwargs):
+    """Generic retry wrapper with exponential backoff, jitter, and quota detection for API calls."""
     for attempt in range(max_retries):
         try:
             return func(*args, **kwargs)
         except Exception as e:
             error_message = str(e).lower()
+
             # Catch rate limit, quota, and temporary server errors
-            if any(x in error_message for x in ["429", "quota", "503", "unavailable", "high demand", "deadline_exceeded"]):
-                # Exponential backoff with jitter: 2^attempt + random(0, 2)
-                # Starting at ~2s, then 4s, 8s, 16s, 32s, 64s, 128s...
-                wait_time = (2 ** attempt) + random.uniform(0, 2)
-                print(f"    - Transient error or Rate limit hit. Waiting for {wait_time:.2f} seconds before retrying (Attempt {attempt+1}/{max_retries})...")
+            is_quota_error = any(x in error_message for x in ["429", "quota", "resource_exhausted"])
+            is_transient_error = any(x in error_message for x in ["503", "unavailable", "high demand", "deadline_exceeded"])
+
+            if is_quota_error or is_transient_error:
+                # If we've hit quota multiple times, implement a 60-second "cool down"
+                if is_quota_error and attempt >= 5:
+                    wait_time = 60 + random.uniform(0, 5)
+                    print(f"    - [Critical Quota Hit] Waiting for {wait_time:.2f} seconds before retrying (Attempt {attempt+1}/{max_retries})...")
+                else:
+                    # Exponential backoff with jitter: 2^attempt + random(0, 2)
+                    wait_time = (2 ** attempt) + random.uniform(0, 2)
+                    print(f"    - Transient error or Rate limit hit. Waiting for {wait_time:.2f} seconds before retrying (Attempt {attempt+1}/{max_retries})...")
+
                 time.sleep(wait_time)
             else:
                 # For non-transient errors, raise immediately
@@ -329,8 +338,8 @@ def process_request(upload_dir, grant_context, persona, questions_text):
             question_embedding = question_embedding_result.embeddings[0].values
             print("    - Question embedding complete.")
         except Exception as e:
-            print(f"    - Failed to embed question: {e}")
-            final_answers.append(answer_block + f"[Error] Failed to embed question after retries: {e}")
+            print(f"    - Failed to embed question after all retries: {e}")
+            final_answers.append(answer_block + f"[Error] Failed to process this question due to persistent API errors: {e}")
             continue
 
         # 4. Find Relevant Chunks
