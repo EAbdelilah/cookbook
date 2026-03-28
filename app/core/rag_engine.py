@@ -2,6 +2,7 @@ import os
 import random
 import time
 import logging
+import threading
 from typing import Callable, Any, TypeVar, List, Optional
 from google import genai
 from google.genai import types
@@ -14,18 +15,38 @@ logger = logging.getLogger(__name__)
 T = TypeVar('T')
 
 class GeminiClient:
-    """Encapsulates the Gemini API client with robust retry and quota handling."""
+    """Encapsulates the Gemini API client with robust retry, quota handling, and global throttling."""
+
+    # Global state for throttling across all threads
+    _lock = threading.Lock()
+    _last_call_time = 0.0
+    MIN_SECONDS_BETWEEN_CALLS = 5.0 # Ensure max 12 calls per minute globally across all tasks
 
     def __init__(self, api_key: str, generation_model: str = 'gemini-1.5-flash', embedding_model: str = 'gemini-embedding-001'):
         self.client = genai.Client(api_key=api_key)
         self.generation_model = generation_model
         self.embedding_model = embedding_model
 
+    def _throttle(self):
+        """Enforces a global delay between any two API calls to stay within Free Tier limits."""
+        with GeminiClient._lock:
+            now = time.time()
+            elapsed = now - GeminiClient._last_call_time
+            if elapsed < GeminiClient.MIN_SECONDS_BETWEEN_CALLS:
+                wait_time = GeminiClient.MIN_SECONDS_BETWEEN_CALLS - elapsed
+                time.sleep(wait_time)
+            GeminiClient._last_call_time = time.time()
+
     def call_with_retry(self, func: Callable[..., T], *args, max_retries: int = 15, **kwargs) -> T:
         """Industry-standard retry wrapper with exponential backoff, jitter, and quota detection."""
         for attempt in range(max_retries):
             try:
+                # 1. Enforce global throttle before every single call
+                self._throttle()
+
+                # 2. Execute the actual API call
                 return func(*args, **kwargs)
+
             except Exception as e:
                 error_message = str(e).lower()
 
@@ -34,26 +55,26 @@ class GeminiClient:
                 is_transient_error = any(x in error_message for x in ["503", "unavailable", "high demand", "deadline_exceeded"])
 
                 if is_quota_error or is_transient_error:
-                    # Implement an immediate 60-second cooldown if quota limits are consistently hit
+                    # Implement an immediate 60-second cooldown if quota limits are hit repeatedly
                     if is_quota_error and attempt >= 5:
                         wait_time = 60 + random.uniform(0, 5)
-                        logger.warning(f"[Critical Quota Hit] Waiting for {wait_time:.2f}s (Attempt {attempt+1}/{max_retries})...")
+                        logger.warning(f"  [Critical Quota Hit] Waiting for {wait_time:.2f}s (Attempt {attempt+1}/{max_retries})...")
                     else:
                         # Exponential backoff with jitter: 2^attempt + random(0, 2)
                         wait_time = (2 ** attempt) + random.uniform(0, 2)
-                        logger.info(f"Transient error or Rate limit hit. Waiting for {wait_time:.2f}s (Attempt {attempt+1}/{max_retries})...")
+                        logger.info(f"  Transient error or Rate limit hit. Waiting for {wait_time:.2f}s (Attempt {attempt+1}/{max_retries})...")
 
                     time.sleep(wait_time)
                 else:
-                    # Non-transient errors are raised immediately
-                    logger.error(f"Non-retryable API error: {e}")
+                    # Non-transient errors (like 400 Bad Request) are raised immediately
+                    logger.error(f"  Non-retryable API error: {e}")
                     raise e
 
         raise Exception(f"Failed after {max_retries} attempts due to persistent API errors or rate limits.")
 
     def embed_documents(self, chunks: List[str]) -> List[List[float]]:
         """Batch embeds a list of document chunks."""
-        logger.info(f"Embedding {len(chunks)} document chunks...")
+        logger.info(f"Embedding {len(chunks)} document chunks in a single batch...")
         def do_embed():
             return self.client.models.embed_content(
                 model=self.embedding_model,
@@ -65,7 +86,7 @@ class GeminiClient:
         return [e.values for e in result.embeddings]
 
     def embed_query(self, query: str) -> List[float]:
-        """Embeds a single query string."""
+        """Embeds a single query string for vector search."""
         def do_embed_query():
             return self.client.models.embed_content(
                 model=self.embedding_model,
@@ -137,7 +158,7 @@ class RAGEngine:
 
     def process_question(self, question: str, chunk_embeddings: List[List[float]], chunks: List[str], grant_context: str, persona: str) -> str:
         """Processes a single question through the RAG pipeline."""
-        logger.info(f"Processing question: '{question}'")
+        logger.info(f"RAG Engine: Processing question - '{question[:50]}...'")
 
         try:
             # 1. Embed Query
@@ -163,5 +184,5 @@ class RAGEngine:
             return self.gemini.generate_answer(full_prompt, system_prompt)
 
         except Exception as e:
-            logger.error(f"Failed to process question '{question}': {e}")
-            return f"[Error] Failed to process this question after multiple retries: {e}"
+            logger.error(f"Failed to process question '{question[:50]}...': {e}")
+            return f"[Error] This question failed after all retries: {e}"
