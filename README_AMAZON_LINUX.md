@@ -1,86 +1,67 @@
-# Running Eswap Strategic Writing Assistant on Amazon Linux
+# Running Eswap Assistant on Amazon Linux
 
-This guide provides step-by-step instructions for setting up and running the `eswap_assistant.py` script on an Amazon Linux (AL2 or AL2023) instance.
+This guide addresses the Python 3.9 deprecation and Telegram module errors.
 
-## 1. Connect to your Amazon Linux Instance
+## 1. Install Python 3.11+ (Recommended)
 
-SSH into your instance:
+Amazon Linux 2 and AL2023 often default to Python 3.9. To avoid "End of Life" warnings:
+
+### For AL2023:
 ```bash
-ssh -i your-key.pem ec2-user@your-instance-public-ip
+sudo yum install python3.11 -y
 ```
 
-## 2. Update the System
-
-Ensure your package manager is up to date:
+### For Amazon Linux 2:
 ```bash
-sudo yum update -y
+sudo amazon-linux-extras install python3.11 -y
 ```
 
-## 3. Install Python 3 and Development Tools
+## 2. Set Up a New Virtual Environment
 
-Most Amazon Linux instances come with Python 3 pre-installed. Verify it:
-```bash
-python3 --version
-```
-
-If not installed, install it:
-```bash
-sudo yum install python3 -y
-```
-
-## 4. Set Up a Virtual Environment (Recommended)
-
-Using a virtual environment keeps your global Python installation clean.
+If you have an old environment, it's best to start fresh with the new Python version.
 
 ```bash
-# Create the environment
-python3 -m venv eswap-env
+# Create environment with Python 3.11
+python3.11 -m venv eswap-env
 
 # Activate it
 source eswap-env/bin/activate
 ```
 
-## 5. Install Dependencies
+## 3. Install Modern Dependencies
 
-Install the required libraries using the provided `requirements.txt`:
+The new script uses the latest `google-genai` and `python-telegram-bot` libraries.
+
 ```bash
 pip install -r requirements.txt
 ```
 
-## 6. Create the Script File
+## 4. Set Up Environment Variables
 
-You can use the `nano` text editor to create and save the script file on your instance.
+Avoid editing the script. Set your tokens in the terminal:
 
-1.  **Open nano:**
-    ```bash
-    nano eswap_assistant.py
-    ```
-2.  **Paste the content:** Copy the script code from your local machine and paste it into the terminal (usually right-click or `Ctrl+Shift+V`).
-3.  **Save and Exit:**
-    - Press `Ctrl + O` (then `Enter`) to write the file.
-    - Press `Ctrl + X` to exit the editor.
-
-## 7. Configure your API Key
-
-For security, it is best to use an environment variable.
-
-### Set the Environment Variable
-Set it in your current terminal session:
 ```bash
-export GEMINI_API_KEY="your_actual_api_key_here"
+export GEMINI_API_KEY="your_gemini_key_here"
+export TELEGRAM_BOT_TOKEN="your_telegram_bot_token_here"
 ```
 
-To make it persistent, add the line above to your `~/.bashrc` file.
+## 5. Run the Assistant
 
-## 8. Run the Assistant
-
-Start the script:
 ```bash
 python3 eswap_assistant.py
 ```
 
-## Troubleshooting
+- If `TELEGRAM_BOT_TOKEN` is set, it starts as a Telegram Bot.
+- If not set, it runs in CLI mode.
 
-- **Rate Limits:** The script has built-in delays (4 seconds between calls) to stay within the Gemini free tier. If you hit limits, it will automatically wait and retry.
-- **Model Name:** The script uses `gemini-1.5-flash`. Ensure your API key has access to this model.
-- **Network Access:** Ensure your EC2 instance has outbound internet access (port 443) to reach Google's API endpoints and search.
+## Troubleshooting "ModuleNotFoundError: No module named 'telegram'"
+
+This error happens when:
+1. You installed the library but are NOT in the virtual environment. Ensure you see `(eswap-env)` in your prompt.
+2. You installed it in a different Python version's environment.
+
+**Fix:**
+```bash
+source eswap-env/bin/activate
+pip install python-telegram-bot
+```
