@@ -47,7 +47,20 @@ Install the required libraries using the provided `requirements.txt`:
 pip install -r requirements.txt
 ```
 
-## 6. Configure your API Key
+## 6. Create the Script File
+
+You can use the `nano` text editor to create and save the script file on your instance.
+
+1.  **Open nano:**
+    ```bash
+    nano eswap_assistant.py
+    ```
+2.  **Paste the content:** Copy the script code from your local machine and paste it into the terminal (usually right-click or `Ctrl+Shift+V`).
+3.  **Save and Exit:**
+    - Press `Ctrl + O` (then `Enter`) to write the file.
+    - Press `Ctrl + X` to exit the editor.
+
+## 7. Configure your API Key
 
 For security, it is best to use an environment variable.
 
@@ -59,7 +72,7 @@ export GEMINI_API_KEY="your_actual_api_key_here"
 
 To make it persistent, add the line above to your `~/.bashrc` file.
 
-## 7. Run the Assistant
+## 8. Run the Assistant
 
 Start the script:
 ```bash
