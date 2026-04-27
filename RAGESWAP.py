@@ -201,7 +201,7 @@ class GeminiClient:
 
     _lock = threading.Lock()
     _last_call_time = 0.0
-    MIN_SECONDS_BETWEEN_CALLS = 5.0 # Ensure max 12 calls per minute globally
+    MIN_SECONDS_BETWEEN_CALLS = 6.0 # Stay strictly under 15 RPM limit (10 RPM)
 
     def __init__(self, api_key: str, generation_model: str = 'gemini-2.5-flash', embedding_model: str = 'gemini-embedding-001'):
         self.client = genai.Client(api_key=api_key)
@@ -432,10 +432,6 @@ def background_process_request(session_id, upload_dir, grant_context, persona, q
             final_answers.append(result_block)
             RESULTS_STORE[session_id]['results'] = final_answers
             RESULTS_STORE[session_id]['progress'] = i + 1
-
-            if i < len(questions) - 1:
-                logger.info(f"[{session_id}] Throttling: Sleeping 20s...")
-                time.sleep(20)
 
         RESULTS_STORE[session_id]['status'] = 'completed'
     except Exception as e:
