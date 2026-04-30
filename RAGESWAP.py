@@ -201,7 +201,7 @@ class GeminiClient:
 
     _lock = threading.Lock()
     _last_call_time = 0.0
-    MIN_SECONDS_BETWEEN_CALLS = 6.0 # Ensure max 10 calls per minute globally
+    MIN_SECONDS_BETWEEN_CALLS = 10.0 # Extremely conservative: max 6 calls per minute
 
     def __init__(self, api_key: str, generation_model: str = 'gemini-2.5-flash', embedding_model: str = 'gemini-embedding-001'):
         # Timeout increased to 120s to handle large document embeddings on slower connections
@@ -232,23 +232,29 @@ class GeminiClient:
                 is_transient_error = any(x in error_message for x in ["500", "502", "503", "504", "unavailable", "high demand", "deadline_exceeded", "internal error", "bad gateway", "gateway timeout", "timed out", "timeout"])
 
                 if is_quota_error or is_transient_error:
-                    if is_quota_error and attempt >= 5:
+                    if is_quota_error:
                         wait_time = 60 + random.uniform(0, 5)
-                        logger.warning(f"  [Critical Quota Hit] Waiting for {wait_time:.2f}s (Attempt {attempt+1})...")
+                        logger.warning(f"  [Quota Limit Hit] Waiting for {wait_time:.2f}s (Attempt {attempt+1}). Error: {e}")
                     else:
                         wait_time = min(2 ** attempt, 60) + random.uniform(0, 2)
-                        logger.info(f"  Transient error or Rate limit hit. Waiting for {wait_time:.2f}s (Attempt {attempt+1})...")
+                        logger.info(f"  Transient error (e.g. 503/Timeout). Waiting for {wait_time:.2f}s (Attempt {attempt+1}). Error: {e}")
                     time.sleep(wait_time)
                     attempt += 1
                 else:
                     logger.error(f"  Non-retryable API error: {e}")
                     raise e
 
-    def embed_documents(self, chunks: List[str]) -> List[List[float]]:
+    def embed_documents(self, chunks: List[str], session_id: Optional[str] = None) -> List[List[float]]:
         """Embeds documents in batches to avoid API limitations on content size."""
         all_embeddings = []
-        batch_size = 90 # Gemini batch limit is usually 100, we use 90 for safety
+        batch_size = 30 # Small batches to avoid large payload/timeout issues
+        total_batches = (len(chunks) + batch_size - 1) // batch_size
+
         for i in range(0, len(chunks), batch_size):
+            batch_idx = (i // batch_size) + 1
+            if session_id and session_id in RESULTS_STORE:
+                RESULTS_STORE[session_id]['status'] = f'Embedding documents (Batch {batch_idx}/{total_batches})...'
+
             batch = chunks[i:i + batch_size]
             def do_embed():
                 return self.client.models.embed_content(
@@ -414,7 +420,7 @@ def background_process_request(session_id, upload_dir, grant_context, persona, q
             return
 
         chunks = rag_engine.chunk_text(all_text)
-        chunk_embeddings = gemini_client.embed_documents(chunks)
+        chunk_embeddings = gemini_client.embed_documents(chunks, session_id=session_id)
         if not chunk_embeddings:
             RESULTS_STORE[session_id]['status'] = 'error'
             RESULTS_STORE[session_id]['error'] = "Failed to create embeddings for document chunks."
