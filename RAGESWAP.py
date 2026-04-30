@@ -228,7 +228,7 @@ class GeminiClient:
             except Exception as e:
                 error_message = str(e).lower()
                 is_quota_error = any(x in error_message for x in ["429", "quota", "resource_exhausted"])
-                is_transient_error = any(x in error_message for x in ["503", "unavailable", "high demand", "deadline_exceeded"])
+                is_transient_error = any(x in error_message for x in ["500", "502", "503", "504", "unavailable", "high demand", "deadline_exceeded", "internal error", "bad gateway", "gateway timeout"])
 
                 if is_quota_error or is_transient_error:
                     if is_quota_error and attempt >= 5:
@@ -377,7 +377,7 @@ class RAGEngine:
             return self.gemini.generate_answer(full_prompt, system_prompt)
         except Exception as e:
             logger.error(f"Failed to process question: {e}")
-            return f"[Error] This question failed after all retries: {e}"
+            return f"[Fatal Error] This question failed due to a non-retryable error: {e}"
 
 # --- Background Task Orchestration ---
 
