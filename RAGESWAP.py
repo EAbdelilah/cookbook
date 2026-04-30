@@ -17,7 +17,7 @@ import numpy as np
 # --- CONFIGURATION ---
 # Replace 'YOUR_API_KEY_HERE' with your actual Gemini API key.
 # For security, you should preferably set it as an environment variable: export GEMINI_API_KEY="your-key"
-API_KEY = os.environ.get("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
+API_KEY = os.environ.get("GEMINI_API_KEY")
 UPLOAD_FOLDER = 'uploads'
 RESULTS_STORE = {} # In-memory results store: {session_id: {'status': 'processing', 'results': [], 'progress': 0, 'total': 0}}
 
@@ -492,4 +492,11 @@ def status(session_id):
     return jsonify(RESULTS_STORE[session_id])
 
 if __name__ == '__main__':
-    app.run(debug=True, port=8080)
+    if not API_KEY or API_KEY == "YOUR_API_KEY_HERE":
+        logger.error("FATAL: GEMINI_API_KEY environment variable is not set.")
+        print("\n[!] ERROR: GEMINI_API_KEY not found.")
+        print("Please set it: export GEMINI_API_KEY='your-api-key-here'\n")
+    else:
+        logger.info("Starting Strategic Writing Assistant on http://127.0.0.1:8080")
+        # Debug is disabled for production stability
+        app.run(debug=False, port=8080)
