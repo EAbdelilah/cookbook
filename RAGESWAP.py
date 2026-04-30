@@ -204,7 +204,7 @@ class GeminiClient:
     MIN_SECONDS_BETWEEN_CALLS = 6.0 # Ensure max 10 calls per minute globally
 
     def __init__(self, api_key: str, generation_model: str = 'gemini-2.5-flash', embedding_model: str = 'gemini-embedding-001'):
-        self.client = genai.Client(api_key=api_key)
+        self.client = genai.Client(api_key=api_key, http_options={'timeout': 60.0})
         self.generation_model = generation_model
         self.embedding_model = embedding_model
 
@@ -244,14 +244,20 @@ class GeminiClient:
                     raise e
 
     def embed_documents(self, chunks: List[str]) -> List[List[float]]:
-        def do_embed():
-            return self.client.models.embed_content(
-                model=self.embedding_model,
-                contents=chunks,
-                config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
-            )
-        result = self.call_with_retry(do_embed)
-        return [e.values for e in result.embeddings]
+        """Embeds documents in batches to avoid API limitations on content size."""
+        all_embeddings = []
+        batch_size = 90 # Gemini batch limit is usually 100, we use 90 for safety
+        for i in range(0, len(chunks), batch_size):
+            batch = chunks[i:i + batch_size]
+            def do_embed():
+                return self.client.models.embed_content(
+                    model=self.embedding_model,
+                    contents=batch,
+                    config=types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
+                )
+            result = self.call_with_retry(do_embed)
+            all_embeddings.extend([e.values for e in result.embeddings])
+        return all_embeddings
 
     def embed_query(self, query: str) -> List[float]:
         def do_embed_query():
@@ -345,7 +351,11 @@ class RAGEngine:
             chunk = text[start:end].strip()
             if chunk: chunks.append(chunk)
             next_start = max(start + 1, end - overlap)
-            start = next_start
+            # Final sanity check: ensure we always move forward
+            if next_start <= start:
+                start = end
+            else:
+                start = next_start
         return [c for c in chunks if c]
 
     def find_relevant_context(self, query_embedding: List[float], chunk_embeddings: List[List[float]], chunks: List[str]) -> str:
