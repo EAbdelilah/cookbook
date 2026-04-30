@@ -204,7 +204,8 @@ class GeminiClient:
     MIN_SECONDS_BETWEEN_CALLS = 6.0 # Ensure max 10 calls per minute globally
 
     def __init__(self, api_key: str, generation_model: str = 'gemini-2.5-flash', embedding_model: str = 'gemini-embedding-001'):
-        self.client = genai.Client(api_key=api_key, http_options={'timeout': 60.0})
+        # Timeout increased to 120s to handle large document embeddings on slower connections
+        self.client = genai.Client(api_key=api_key, http_options={'timeout': 120.0})
         self.generation_model = generation_model
         self.embedding_model = embedding_model
 
@@ -228,7 +229,7 @@ class GeminiClient:
             except Exception as e:
                 error_message = str(e).lower()
                 is_quota_error = any(x in error_message for x in ["429", "quota", "resource_exhausted"])
-                is_transient_error = any(x in error_message for x in ["500", "502", "503", "504", "unavailable", "high demand", "deadline_exceeded", "internal error", "bad gateway", "gateway timeout"])
+                is_transient_error = any(x in error_message for x in ["500", "502", "503", "504", "unavailable", "high demand", "deadline_exceeded", "internal error", "bad gateway", "gateway timeout", "timed out", "timeout"])
 
                 if is_quota_error or is_transient_error:
                     if is_quota_error and attempt >= 5:
